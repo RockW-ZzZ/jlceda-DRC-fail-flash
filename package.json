@@ -3,7 +3,7 @@
 	"type": "module",
 	"version": "1.6.17",
 	"description": "JLCEDA & EasyEDA Professional Extension API Development Toolkit",
-	"author": "JLCEDA <support@lceda.cn>",
+	"author": "zcj1296461641@outlook.com",
 	"license": "Apache-2.0",
 	"homepage": "https://pro.lceda.cn/",
 	"bin": {

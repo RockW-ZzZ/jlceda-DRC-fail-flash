@@ -4,14 +4,14 @@
 	"displayName": "DRC 语音提醒",
 	"description": "原理图 / PCB DRC 检测完成后按错误数、警告数播放语音提示（可自定义本地语音文件，未选择时使用系统语音合成）。",
 	"version": "1.0.0",
-	"publisher": "JLCEDA <support@lceda.cn>",
+	"publisher": "zcj1296461641@outlook.com",
 	"engines": {
 		"eda": "^3.2.0"
 	},
-	"license": "Apache-2.0",
+	"license": "MIT",
 	"repository": {
-		"type": "extension-store",
-		"url": ""
+		"type": "git",
+		"url": "https://github.com/RockW-ZzZ/jlceda-DRC-fail-flash.git"
 	},
 	"categories": "Other",
 	"keywords": [
