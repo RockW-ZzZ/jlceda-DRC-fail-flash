@@ -16,6 +16,17 @@
 - 自定义语音：选择本地语音文件夹，自动按文件名匹配；选择后自动记住，下次打开窗口自动加载。
 - 未加载或缺失语音文件时，自动使用系统语音合成播报对应语句。
 
+## 下载
+
+从 [GitHub Releases](https://github.com/RockW-ZzZ/jlceda-DRC-fail-flash/releases) 获取最新发布版本：
+
+| 文件 | 说明 |
+| --- | --- |
+| `drc-voice-alert_v<版本号>.eext` | 插件本体，在立创 EDA 专业版「扩展管理器」中导入 |
+| `drc-voice-alert-wav_v<版本号>.zip` | 预置语音包（含 5 个合成语音文件），解压后按下方「语音文件命名规则」在插件窗口中选择该文件夹即可直接使用 |
+
+> 语音包解压后，文件夹内文件名保持不变（`sch-error.wav`、`sch-warning.wav`、`pcb-error.wav`、`pcb-warning.wav`、`pass.wav`），插件会自动按文件名匹配。
+
 ## 安装方法
 
 1. 构建或在 `build/dist/` 目录获取扩展包 `drc-voice-alert_v<版本号>.eext`。
