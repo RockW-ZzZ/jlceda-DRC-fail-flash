@@ -4,7 +4,7 @@
 	"version": "1.6.17",
 	"description": "JLCEDA & EasyEDA Professional Extension API Development Toolkit",
 	"author": "JLCEDA <support@lceda.cn>",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"homepage": "https://pro.lceda.cn/",
 	"bin": {
 		"create-easyeda-api-sdk": "./build/create.js"
