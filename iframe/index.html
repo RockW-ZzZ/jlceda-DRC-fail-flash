@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="zh-Hans">
+	<head>
+		<title>DRC 语音提醒</title>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<style>
+			* { box-sizing: border-box; }
+			body {
+				margin: 0;
+				padding: 12px 14px;
+				font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+				font-size: 13px;
+				color: #c9d1d9;
+				background: #1e1f24;
+			}
+			h1 { margin: 0 0 10px; font-size: 15px; color: #e6edf3; }
+			.row { display: flex; gap: 10px; margin-bottom: 10px; }
+			button {
+				flex: 1;
+				padding: 9px 6px;
+				border: 1px solid #373b43;
+				border-radius: 6px;
+				background: #2d313a;
+				color: #e6edf3;
+				font-size: 13px;
+				cursor: pointer;
+			}
+			button:hover:not(:disabled) { background: #3a3f4b; }
+			button:disabled { opacity: 0.5; cursor: not-allowed; }
+			.setting { flex: 1; }
+			.setting label { display: block; margin-bottom: 3px; color: #9aa4b2; }
+			.setting select {
+				width: 100%;
+				padding: 6px 4px;
+				border: 1px solid #373b43;
+				border-radius: 6px;
+				background: #2d313a;
+				color: #e6edf3;
+				font-size: 13px;
+			}
+			#voiceStatus {
+				margin-bottom: 8px;
+				padding: 8px 10px;
+				border: 1px solid #373b43;
+				border-radius: 6px;
+				background: #16171c;
+				color: #9aa4b2;
+				min-height: 32px;
+				word-break: break-all;
+			}
+			#status {
+				margin-top: 10px;
+				padding: 8px 10px;
+				border: 1px solid #373b43;
+				border-radius: 6px;
+				background: #16171c;
+				color: #9aa4b2;
+				min-height: 32px;
+				white-space: pre-wrap;
+				word-break: break-all;
+			}
+			#status.running { color: #7ee0a3; }
+			#status.done { color: #7ee0a3; }
+			#status.fail { color: #ff7b72; }
+			.tip { margin-top: 8px; font-size: 11px; color: #6e7681; line-height: 1.5; }
+		</style>
+	</head>
+	<body>
+		<h1>DRC 语音提醒</h1>
+
+		<div class="row">
+			<button id="btnSch" type="button">检查原理图 DRC</button>
+			<button id="btnPcb" type="button">检查 PCB DRC</button>
+		</div>
+
+		<div class="row">
+			<div class="setting">
+				<label for="speedSel">播放倍速</label>
+				<select id="speedSel">
+					<option value="0.5">0.5 倍</option>
+					<option value="0.75">0.75 倍</option>
+					<option value="1" selected>1.0 倍</option>
+					<option value="1.25">1.25 倍</option>
+					<option value="1.5">1.5 倍</option>
+					<option value="2">2.0 倍</option>
+				</select>
+			</div>
+			<div class="setting">
+				<label for="countModeSel">播放次数</label>
+				<select id="countModeSel">
+					<option value="count" selected>按错误/警告数量</option>
+					<option value="once">只播放一次</option>
+				</select>
+			</div>
+		</div>
+
+		<div class="row">
+			<button id="btnPickFolder" type="button">选择语音文件夹</button>
+			<input id="folderInput" type="file" webkitdirectory multiple style="display:none;" />
+		</div>
+		<div id="voiceStatus">语音文件：未加载（将使用系统语音合成兜底）</div>
+
+		<div id="status">就绪：点击上方按钮开始检查。</div>
+		<div class="tip">
+			语音文件命名（放在所选文件夹内）：sch-error.wav、sch-warning.wav、pcb-error.wav、pcb-warning.wav（可选 pass.wav）。<br />
+			选中 wav 文件夹后会记住所选语音文件，下次打开窗口自动加载；未加载或缺失的文件用系统语音合成播报。
+		</div>
+
+		<script>
+			// iframe 内可直接使用注入的全局 eda 对象（兜底取 window.parent.eda）
+			var edaObj = (typeof eda !== 'undefined') ? eda : (window.parent && window.parent.eda);
+
+			// 语音槽位：文件名 -> 对应 TTS 语句（文件缺失时兜底用）
+			var SLOTS = {
+				'sch-error': { file: 'sch-error.wav', tts: '原理图有错误，杂鱼！' },
+				'sch-warning': { file: 'sch-warning.wav', tts: '原理图有警告，杂鱼！' },
+				'pcb-error': { file: 'pcb-error.wav', tts: 'PCB有错误，杂鱼！' },
+				'pcb-warning': { file: 'pcb-warning.wav', tts: 'PCB有警告，杂鱼！' },
+				'pass': { file: 'pass.wav', tts: '咸鱼翻身啦！' },
+			};
+
+			var audioUrls = {};   // 槽位 -> objectURL（HTMLAudio 兜底用）
+			var slotFiles = {};   // 槽位 -> File（Web Audio 播放用）
+			var slotBuffers = {}; // 槽位 -> 解码后的 AudioBuffer 缓存
+			var busy = false;
+
+			var btnSch = document.getElementById('btnSch');
+			var btnPcb = document.getElementById('btnPcb');
+			var btnPickFolder = document.getElementById('btnPickFolder');
+			var folderInput = document.getElementById('folderInput');
+			var speedSel = document.getElementById('speedSel');
+			var countModeSel = document.getElementById('countModeSel');
+			var voiceStatusEl = document.getElementById('voiceStatus');
+			var statusEl = document.getElementById('status');
+
+			function setStatus(text, kind) {
+				statusEl.className = kind || '';
+				statusEl.textContent = text;
+			}
+
+			function setSlotFile(key, file) {
+				if (audioUrls[key]) {
+					try { URL.revokeObjectURL(audioUrls[key]); } catch (e) {}
+				}
+				slotFiles[key] = file || null;
+				slotBuffers[key] = null;
+				audioUrls[key] = file ? URL.createObjectURL(file) : null;
+			}
+
+			function updateVoiceStatus() {
+				var loaded = [];
+				for (var key in SLOTS) {
+					if (slotFiles[key]) loaded.push(SLOTS[key].file);
+				}
+				voiceStatusEl.textContent = '语音文件：' + (loaded.length ? loaded.join('、') : '未加载（将使用系统语音合成兜底）');
+			}
+
+			function basename(path) {
+				return String(path || '').split(/[\\/]/).pop();
+			}
+
+			function matchByFilename(files) {
+				var found = {};
+				files.forEach(function (entry) {
+					var name = basename(entry.relativePath).toLowerCase();
+					if (!name && entry.file) name = String(entry.file.name || '').toLowerCase();
+					for (var key in SLOTS) {
+						if (name === SLOTS[key].file.toLowerCase()) {
+							found[key] = entry.file;
+						}
+					}
+				});
+				return found;
+			}
+
+			function loadFromFolderFiles(files) {
+				var found = matchByFilename(files);
+				for (var key in SLOTS) {
+					setSlotFile(key, found[key] || null);
+				}
+				updateVoiceStatus();
+				persistSlots();
+			}
+
+			// ---- 记住文件夹：File System Access API + IndexedDB ----
+			var IDB_NAME = 'drc-voice-alert';
+			var IDB_STORE = 'settings';
+
+			function idbOpen() {
+				return new Promise(function (resolve, reject) {
+					var req = indexedDB.open(IDB_NAME, 1);
+					req.onupgradeneeded = function () {
+						if (!req.result.objectStoreNames.contains(IDB_STORE)) {
+							req.result.createObjectStore(IDB_STORE);
+						}
+					};
+					req.onsuccess = function () { resolve(req.result); };
+					req.onerror = function () { reject(req.error); };
+				});
+			}
+
+			function idbSet(key, value) {
+				return idbOpen().then(function (db) {
+					return new Promise(function (resolve, reject) {
+						var tx = db.transaction(IDB_STORE, 'readwrite');
+						tx.objectStore(IDB_STORE).put(value, key);
+						tx.oncomplete = function () { resolve(); };
+						tx.onerror = function () { reject(tx.error); };
+					});
+				});
+			}
+
+			function idbGet(key) {
+				return idbOpen().then(function (db) {
+					return new Promise(function (resolve, reject) {
+						var tx = db.transaction(IDB_STORE, 'readonly');
+						var req = tx.objectStore(IDB_STORE).get(key);
+						req.onsuccess = function () { resolve(req.result); };
+						req.onerror = function () { reject(req.error); };
+					});
+				});
+			}
+
+			function idbDelete(key) {
+				return idbOpen().then(function (db) {
+					return new Promise(function (resolve, reject) {
+						var tx = db.transaction(IDB_STORE, 'readwrite');
+						tx.objectStore(IDB_STORE).delete(key);
+						tx.oncomplete = function () { resolve(); };
+						tx.onerror = function () { reject(tx.error); };
+					});
+				});
+			}
+
+			// 将当前各槽位音频文件持久化到 IndexedDB（不依赖路径/权限，重开窗口可自动加载）
+			function persistSlots() {
+				Object.keys(SLOTS).forEach(function (key) {
+					var f = slotFiles[key];
+					if (f) {
+						idbSet('wav:' + key, f).catch(function () {});
+					} else {
+						idbDelete('wav:' + key).catch(function () {});
+					}
+				});
+			}
+
+			async function loadFromDirHandle(handle) {
+				for (var key in SLOTS) {
+					var file = null;
+					try {
+						var fh = await handle.getFileHandle(SLOTS[key].file);
+						file = await fh.getFile();
+					} catch (e) {
+						file = null;
+					}
+					setSlotFile(key, file);
+				}
+				updateVoiceStatus();
+				persistSlots();
+			}
+
+			// 选择语音文件夹：优先 File System Access API，否则原生 webkitdirectory
+			async function pickFolder() {
+				if (window.showDirectoryPicker) {
+					try {
+						var handle = await window.showDirectoryPicker({ mode: 'read' });
+						await loadFromDirHandle(handle);
+						setStatus('语音文件夹已选择并记住，下次打开窗口将自动加载。', 'done');
+						return;
+					} catch (e) {
+						if (e && e.name === 'AbortError') return; // 用户取消
+						console.error('[DRC 语音提醒] showDirectoryPicker 失败：', e);
+						// 继续尝试原生 webkitdirectory 兜底
+					}
+				}
+				// 兜底：原生 webkitdirectory 文件输入（仅用于本次选择，文件内容会持久化）
+				folderInput.click();
+			}
+
+			folderInput.addEventListener('change', function () {
+				try {
+					var files = [];
+					for (var i = 0; i < folderInput.files.length; i++) {
+						files.push({
+							relativePath: folderInput.files[i].webkitRelativePath || '',
+							file: folderInput.files[i],
+						});
+					}
+					if (!files.length) {
+						setStatus('未读取到任何文件。', 'fail');
+						return;
+					}
+					loadFromFolderFiles(files);
+					setStatus('语音文件夹已加载并记住，下次打开窗口将自动加载。', 'done');
+				} catch (e) {
+					console.error('[DRC 语音提醒] 读取文件夹失败：', e);
+					setStatus('读取文件夹失败：' + String((e && e.message) || e), 'fail');
+				} finally {
+					folderInput.value = '';
+				}
+			});
+
+			// 打开窗口时自动加载上次保存的语音文件（Blob 持久化在 IndexedDB）
+			async function initFromSaved() {
+				var any = false;
+				for (var key in SLOTS) {
+					try {
+						var blob = await idbGet('wav:' + key);
+						if (blob && blob instanceof Blob) {
+							setSlotFile(key, blob);
+							any = true;
+						}
+					} catch (e) {
+						// 忽略单个槽位读取失败
+					}
+				}
+				updateVoiceStatus();
+				if (any) {
+					setStatus('已自动加载上次选择的语音文件。', 'done');
+				}
+			}
+
+			function itemCount(item) {
+				// 运行时结构：{type, count} 或 {type, rule, primitives[]}
+				if (item && typeof item.count === 'number' && item.count > 0) return item.count;
+				if (item && Array.isArray(item.primitives) && item.primitives.length > 0) return item.primitives.length;
+				return 1;
+			}
+
+			function classifyViolations(list) {
+				var errors = 0;
+				var warnings = 0;
+				if (!Array.isArray(list)) return { errors: errors, warnings: warnings };
+				for (var i = 0; i < list.length; i++) {
+					var item = list[i];
+					var t = (item && typeof item.type === 'string') ? item.type.toLowerCase() : '';
+					var n = itemCount(item);
+					if (t === 'warn' || t === 'warning') {
+						warnings += n;
+					} else {
+						// 'fatalError' / 'error' 以及未知级别一律按错误处理
+						errors += n;
+					}
+				}
+				return { errors: errors, warnings: warnings };
+			}
+
+			// ---- 音频播放：优先 Web Audio（点击手势内解锁 AudioContext），否则共用 HTMLAudio 元素 ----
+			var actx = null;
+			var audioEl = null;
+
+			function getAudioCtx() {
+				if (!actx) {
+					try {
+						actx = new (window.AudioContext || window.webkitAudioContext)();
+					} catch (e) {
+						return null;
+					}
+				}
+				if (actx.state === 'suspended') {
+					try { actx.resume().catch(function () {}); } catch (e) {}
+				}
+				return actx;
+			}
+
+			// 在用户点击手势内解锁音频（AudioContext resume）
+			function primePlayback() {
+				getAudioCtx();
+			}
+
+			function getBuffer(key) {
+				if (slotBuffers[key]) return Promise.resolve(slotBuffers[key]);
+				var file = slotFiles[key];
+				if (!file) return Promise.resolve(null);
+				return file.arrayBuffer().then(function (ab) {
+					return actx.decodeAudioData(ab).then(function (buf) {
+						slotBuffers[key] = buf;
+						return buf;
+					});
+				});
+			}
+
+			function playOnce(key) {
+				var slot = SLOTS[key];
+				var url = audioUrls[key];
+				var file = slotFiles[key];
+				var speed = parseFloat(speedSel.value) || 1;
+				var ctx = getAudioCtx();
+				return new Promise(function (resolve) {
+					var settled = false;
+					function done() {
+						if (!settled) { settled = true; resolve(); }
+					}
+					// 仅当 AudioContext 已解锁（running）时才用 Web Audio，否则回退 HTMLAudio
+					if (ctx && ctx.state === 'running' && file) {
+						getBuffer(key).then(function (buf) {
+							if (!buf) { done(); return; }
+							var src = ctx.createBufferSource();
+							src.buffer = buf;
+							src.playbackRate.value = speed;
+							src.connect(ctx.destination);
+							src.onended = done;
+							setTimeout(done, 6000);
+							try { src.start(); } catch (e) { done(); }
+						}).catch(done);
+					} else if (url) {
+						if (!audioEl) audioEl = new Audio();
+						audioEl.muted = false;
+						audioEl.src = url;
+						audioEl.playbackRate = speed;
+						audioEl.addEventListener('ended', done, { once: true });
+						audioEl.addEventListener('error', done, { once: true });
+						setTimeout(done, 5000);
+						audioEl.play().then(function () {
+							setTimeout(done, 5000);
+						}).catch(function (e) {
+							console.warn('[DRC 语音提醒] HTMLAudio 播放失败：', e);
+							done();
+						});
+					} else if (slot && slot.tts && 'speechSynthesis' in window) {
+						var u = new SpeechSynthesisUtterance(slot.tts);
+						u.lang = 'zh-CN';
+						u.rate = Math.min(10, Math.max(0.1, speed));
+						u.onend = done;
+						u.onerror = done;
+						setTimeout(done, 5000);
+						try { speechSynthesis.speak(u); } catch (e) { done(); }
+					} else {
+						done();
+					}
+				});
+			}
+
+			function sleep(ms) {
+				return new Promise(function (r) { setTimeout(r, ms); });
+			}
+
+			async function runCheck(kind) {
+				if (busy) return;
+				if (!edaObj) {
+					setStatus('错误：无法访问 eda 对象', 'fail');
+					return;
+				}
+				primePlayback(); // 在用户点击手势内解锁音频
+				busy = true;
+				btnSch.disabled = true;
+				btnPcb.disabled = true;
+				btnPickFolder.disabled = true;
+				var label = kind === 'sch' ? '原理图' : 'PCB';
+				try {
+					setStatus('正在检查' + label + ' DRC ...', 'running');
+					var list = kind === 'sch'
+						? (await edaObj.sch_Drc.check(true, false, true)) || []
+						: (await edaObj.pcb_Drc.check(true, false, true)) || [];
+
+					console.log('[DRC 语音提醒] ' + label + ' 明细条目数:', list.length);
+					for (var di = 0; di < Math.min(list.length, 20); di++) {
+						var dit = list[di];
+						console.log('[DRC 语音提醒] [' + di + ']', typeof dit === 'string' ? dit : JSON.stringify({
+							type: dit && dit.type,
+							count: dit && dit.count,
+							rule: dit && dit.rule,
+							net: dit && dit.net,
+							primitives: (dit && Array.isArray(dit.primitives)) ? dit.primitives.length : 0,
+						}));
+					}
+
+					var r = classifyViolations(list);
+					var summary = label + ' DRC 完成：错误 ' + r.errors + ' 个，警告 ' + r.warnings + ' 个（明细 ' + list.length + ' 条）';
+					setStatus(summary, 'done');
+
+					var countMode = countModeSel.value; // 'count' | 'once'
+					if (r.errors === 0 && r.warnings === 0) {
+						await playOnce('pass');
+					} else {
+						var errTimes = countMode === 'once' ? (r.errors > 0 ? 1 : 0) : r.errors;
+						var warnTimes = countMode === 'once' ? (r.warnings > 0 ? 1 : 0) : r.warnings;
+						for (var i = 0; i < errTimes; i++) {
+							await playOnce(kind + '-error');
+						}
+						for (var j = 0; j < warnTimes; j++) {
+							await playOnce(kind + '-warning');
+						}
+					}
+					setStatus(summary + '（语音播报完成）', 'done');
+				} catch (e) {
+					console.error('[DRC 语音提醒] 检查失败：', e);
+					setStatus('检查失败：' + String((e && e.message) || e), 'fail');
+				} finally {
+					busy = false;
+					btnSch.disabled = false;
+					btnPcb.disabled = false;
+					btnPickFolder.disabled = false;
+					await sleep(1);
+				}
+			}
+
+			btnSch.addEventListener('click', function () { runCheck('sch'); });
+			btnPcb.addEventListener('click', function () { runCheck('pcb'); });
+			btnPickFolder.addEventListener('click', function () { pickFolder(); });
+
+			// 窗口打开时自动加载上次选择的语音文件夹
+			initFromSaved();
+		</script>
+	</body>
+</html>
