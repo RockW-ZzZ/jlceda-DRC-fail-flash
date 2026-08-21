@@ -88,4 +88,4 @@ npm run build   # 产出 build/dist/drc-voice-alert_v<版本号>.eext
 
 ## 许可
 
-Apache-2.0
+MIT License
