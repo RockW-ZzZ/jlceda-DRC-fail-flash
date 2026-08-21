@@ -16,6 +16,10 @@
 - 自定义语音：选择本地语音文件夹，自动按文件名匹配；选择后自动记住，下次打开窗口自动加载。
 - 未加载或缺失语音文件时，自动使用系统语音合成播报对应语句。
 
+## 效果演示
+
+![DRC 语音提醒演示](expm.gif)
+
 ## 下载
 
 从 [GitHub Releases](https://github.com/RockW-ZzZ/jlceda-DRC-fail-flash/releases) 获取最新发布版本：
