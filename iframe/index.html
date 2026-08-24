@@ -376,9 +376,11 @@
 				}
 			}
 
-			// ---- 实时 PCB-DRC 播报开关 + 主线程待播报轮询 ----
+			// ---- 实时 PCB-DRC 播报 ----
 			var REALTIME_ENABLED_KEY = 'realtimeDrcEnabled';
 			var PENDING_REALTIME_KEY = 'pendingRealtimeDrc';
+			var REALTIME_EVENT_ID = 'drc-voice-alert-realtime-iframe';
+			var realtimeListenerRegistered = false;
 
 			function readRealtimeSetting() {
 				if (edaObj && edaObj.sys_Storage && typeof edaObj.sys_Storage.getExtensionUserConfig === 'function') {
@@ -399,43 +401,97 @@
 				realtimeSel.value = readRealtimeSetting() ? 'on' : 'off';
 			}
 
+			// 播报实时 DRC 违规（错误/警告）
+			function speakRealtimeDrc(errs, warns, source) {
+				if (errs === 0 && warns === 0) return Promise.resolve();
+				var countMode = countModeSel.value;
+				primePlayback();
+				var p = Promise.resolve();
+				if (errs === 0 && warns === 0) {
+					p = p.then(function () { return playOnce('pass'); });
+				} else {
+					var errTimes = countMode === 'once' ? (errs > 0 ? 1 : 0) : errs;
+					var warnTimes = countMode === 'once' ? (warns > 0 ? 1 : 0) : warns;
+					for (var i = 0; i < errTimes; i++) {
+						(function () { p = p.then(function () { return playOnce('pcb-error'); }); })();
+					}
+					for (var j = 0; j < warnTimes; j++) {
+						(function () { p = p.then(function () { return playOnce('pcb-warning'); }); })();
+					}
+				}
+				return p.then(function () {
+					setStatus('实时PCB-DRC：错误 ' + errs + ' 个，警告 ' + warns + ' 个（' + (source || '自动') + '播报完成）', 'done');
+				});
+			}
+
+			// 窗口内直接注册实时 DRC 监听（窗口打开即生效，不依赖主线程 activate）
+			function registerRealtimeListener() {
+				if (realtimeListenerRegistered) return;
+				if (!edaObj || !edaObj.pcb_Event || typeof edaObj.pcb_Event.addRealTimeDrcResultEventListener !== 'function') {
+					console.warn('[DRC 语音提醒] 当前环境不支持实时 DRC 监听');
+					return;
+				}
+				try {
+					edaObj.pcb_Event.addRealTimeDrcResultEventListener(REALTIME_EVENT_ID, 'all', function (_eventType, props) {
+						if (!readRealtimeSetting()) return;
+						try {
+							var raw = props && props[0] && props[0].drcResult;
+							if (raw === undefined || raw === null) return;
+							var r = classifyViolations(normalizeDrcResult(raw));
+							if (r.errors === 0 && r.warnings === 0) return;
+							console.log('[DRC 语音提醒] 实时 DRC 检出违规：错误', r.errors, '警告', r.warnings, 'raw=', JSON.stringify(raw).slice(0, 500));
+							speakRealtimeDrc(r.errors, r.warnings, '实时');
+						} catch (e) {
+							console.warn('[DRC 语音提醒] 处理实时 DRC 事件失败：', e);
+						}
+					});
+					realtimeListenerRegistered = true;
+					console.log('[DRC 语音提醒] 实时 DRC 监听已注册');
+				} catch (e) {
+					console.warn('[DRC 语音提醒] 注册实时 DRC 监听失败：', e);
+				}
+			}
+
+			// 确保实时 DRC 已启用（仅 PCB；若已启用则结果为 true）
+			function ensureRealTimeDrc() {
+				if (!edaObj || !edaObj.pcb_Drc || typeof edaObj.pcb_Drc.startRealTimeDrc !== 'function') return;
+				try {
+					edaObj.pcb_Drc.startRealTimeDrc().then(function (ok) {
+						console.log('[DRC 语音提醒] startRealTimeDrc:', ok);
+					}).catch(function (e) {
+						console.warn('[DRC 语音提醒] startRealTimeDrc 失败：', e);
+					});
+				} catch (e) {
+					console.warn('[DRC 语音提醒] startRealTimeDrc 异常：', e);
+				}
+			}
+
 			realtimeSel.addEventListener('change', function () {
 				var on = realtimeSel.value === 'on';
 				writeRealtimeSetting(on);
+				if (on) {
+					ensureRealTimeDrc();
+				}
 				setStatus(on ? '已开启实时PCB-DRC播报：实时 DRC 检出违规时自动播报。' : '已关闭实时PCB-DRC播报。', 'done');
 			});
 
-			// 轮询主线程写入的待播报数据（主线程无法播放音频，由窗口后台播报）
+			// 轮询主线程写入的待播报数据（兜底通道；主线程 activate 未调用时无数据）
 			var pendingPolling = null;
 
 			function startRealtimePolling() {
 				if (pendingPolling) return;
-				pendingPolling = setInterval(async function () {
+				pendingPolling = setInterval(function () {
 					if (!edaObj || !edaObj.sys_Storage) return;
 					try {
 						var pending = edaObj.sys_Storage.getExtensionUserConfig(PENDING_REALTIME_KEY);
 						if (!pending || typeof pending !== 'object') return;
 						if (typeof edaObj.sys_Storage.deleteExtensionUserConfig === 'function') {
-							await edaObj.sys_Storage.deleteExtensionUserConfig(PENDING_REALTIME_KEY);
+							edaObj.sys_Storage.deleteExtensionUserConfig(PENDING_REALTIME_KEY);
 						}
 						var errs = Number(pending.errors) || 0;
 						var warns = Number(pending.warnings) || 0;
 						if (errs === 0 && warns === 0) return;
-						var countMode = countModeSel.value;
-						primePlayback();
-						if (errs === 0 && warns === 0) {
-							await playOnce('pass');
-						} else {
-							var errTimes = countMode === 'once' ? (errs > 0 ? 1 : 0) : errs;
-							var warnTimes = countMode === 'once' ? (warns > 0 ? 1 : 0) : warns;
-							for (var i = 0; i < errTimes; i++) {
-								await playOnce('pcb-error');
-							}
-							for (var j = 0; j < warnTimes; j++) {
-								await playOnce('pcb-warning');
-							}
-						}
-						setStatus('实时PCB-DRC：错误 ' + errs + ' 个，警告 ' + warns + ' 个（自动播报完成）', 'done');
+						speakRealtimeDrc(errs, warns, '后台');
 					} catch (e) {
 						console.warn('[DRC 语音提醒] 实时 DRC 待播报处理失败：', e);
 					}
@@ -465,6 +521,19 @@
 					}
 				}
 				return { errors: errors, warnings: warnings };
+			}
+
+			// 将实时 DRC 事件中的 drcResult 归一化为违规条目数组（兼容多种返回结构）
+			function normalizeDrcResult(raw) {
+				if (Array.isArray(raw)) return raw;
+				if (raw && typeof raw === 'object') {
+					if (Array.isArray(raw.violations)) return raw.violations;
+					if (Array.isArray(raw.data)) return raw.data;
+					if (Array.isArray(raw.details)) return raw.details;
+					if (Array.isArray(raw.list)) return raw.list;
+					if (typeof raw.count === 'number' && raw.count > 0) return [{ type: 'error', count: raw.count }];
+				}
+				return [];
 			}
 
 			// ---- 音频播放：优先 Web Audio（点击手势内解锁 AudioContext），否则共用 HTMLAudio 元素 ----
@@ -621,9 +690,13 @@
 			btnPcb.addEventListener('click', function () { runCheck('pcb'); });
 			btnPickFolder.addEventListener('click', function () { pickFolder(); });
 
-			// 窗口打开时：先加载上次选择的语音文件夹，未覆盖的槽位再加载内置语音；随后加载实时播报开关并启动轮询
+			// 窗口打开时：加载语音槽位与实时播报开关；注册实时 DRC 监听并确保实时 DRC 启用
 			initRealtimeSetting();
 			startRealtimePolling();
+			registerRealtimeListener();
+			if (readRealtimeSetting()) {
+				ensureRealTimeDrc();
+			}
 			initFromSaved().then(loadBuiltinSlots);
 		</script>
 	</body>

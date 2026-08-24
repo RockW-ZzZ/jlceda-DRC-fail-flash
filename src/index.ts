@@ -29,6 +29,11 @@ export function activate(_status?: 'onStartupFinished', _arg?: string): void {
 				console.error('[DRC 语音提醒] 处理实时 DRC 结果失败：', e);
 			});
 		});
+
+		// 确保实时 DRC 已启用（仅 PCB；已启用则返回 true）
+		if (eda.pcb_Drc && typeof eda.pcb_Drc.startRealTimeDrc === 'function') {
+			eda.pcb_Drc.startRealTimeDrc().catch(() => {});
+		}
 	}
 	catch (e) {
 		console.error('[DRC 语音提醒] 注册实时 DRC 监听失败：', e);
@@ -51,9 +56,11 @@ async function handleRealTimeDrc(props: unknown): Promise<void> {
 	if (raw === undefined || raw === null)
 		return;
 
-	const { errors, warnings } = classifyViolations(raw);
+	const { errors, warnings } = classifyViolations(normalizeDrcResult(raw));
 	if (errors === 0 && warnings === 0)
 		return;
+
+	console.log('[DRC 语音提醒] 实时 DRC 检出违规：错误', errors, '警告', warnings);
 
 	// 确保窗口存在（不存在则隐藏式打开，iframe 后台轮询待播报）
 	const exist = await eda.sys_IFrame.isIFrameAlreadyExist(IFRAME_ID);
@@ -89,9 +96,31 @@ export async function openDrcVoiceWindow(): Promise<void> {
 }
 
 /**
+ * 将实时 DRC 事件中的 drcResult 归一化为违规条目数组（兼容多种返回结构）。
+ */
+function normalizeDrcResult(raw: unknown): Array<unknown> {
+	if (Array.isArray(raw))
+		return raw;
+	if (raw && typeof raw === 'object') {
+		const obj = raw as Record<string, unknown>;
+		if (Array.isArray(obj.violations))
+			return obj.violations;
+		if (Array.isArray(obj.data))
+			return obj.data;
+		if (Array.isArray(obj.details))
+			return obj.details;
+		if (Array.isArray(obj.list))
+			return obj.list;
+		if (typeof obj.count === 'number' && obj.count > 0)
+			return [{ type: 'error', count: obj.count }];
+	}
+	return [];
+}
+
+/**
  * 统计违规：按条目 type 聚合，违规数取 count 字段，其次 primitives.length，再按 1 计。
  */
-function classifyViolations(list: unknown): { errors: number; warnings: number } {
+function classifyViolations(list: Array<unknown>): { errors: number; warnings: number } {
 	let errors = 0;
 	let warnings = 0;
 	if (!Array.isArray(list))
