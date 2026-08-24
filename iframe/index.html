@@ -115,7 +115,7 @@
 			<div class="tip">
 				插件已内置合成语音（sch-error.wav、sch-warning.wav、pcb-error.wav、pcb-warning.wav、pass.wav），开箱即用；也可以选择自定义语音文件夹覆盖内置语音。<br />
 				选中 wav 文件夹后会记住所选语音文件，下次打开窗口自动加载；自定义语音优先于内置语音，内置缺失的文件用系统语音合成播报。<br />
-				开启「实时PCB-DRC播报」后，PCB 实时 DRC 检出违规时也会自动播报（窗口会自动在后台保持运行）。
+				开启「实时PCB-DRC播报」后，需在 PCB 画布中操作（布线、移动器件等）触发 EDA 实时 DRC，检出违规时自动播报。
 			</div>
 
 		<script>
@@ -465,14 +465,44 @@
 				}
 			}
 
+			// 查询当前焦点文档类型（1=原理图, 3=PCB），用于诊断实时 DRC 环境
+			function getCurrentDocType() {
+				if (!edaObj || !edaObj.dmt_SelectControl || typeof edaObj.dmt_SelectControl.getCurrentDocumentInfo !== 'function') {
+					return Promise.resolve(undefined);
+				}
+				return edaObj.dmt_SelectControl.getCurrentDocumentInfo().then(function (doc) {
+					return doc && doc.documentType;
+				}).catch(function () {
+					return undefined;
+				});
+			}
+
+			// 查询实时 DRC 当前状态
+			function queryRealTimeDrcStatus() {
+				if (!edaObj || !edaObj.pcb_Drc || typeof edaObj.pcb_Drc.getRealTimeDrcStatus !== 'function') {
+					return Promise.resolve(undefined);
+				}
+				return edaObj.pcb_Drc.getRealTimeDrcStatus().then(function (ok) {
+					return ok;
+				}).catch(function () {
+					return undefined;
+				});
+			}
+
 			realtimeSel.addEventListener('change', function () {
 				var on = realtimeSel.value === 'on';
 				writeRealtimeSetting(on);
 				if (on) {
-					var ok = ensureRealTimeDrc();
-					setStatus(ok
-						? '已开启实时PCB-DRC播报：实时 DRC 检出违规时自动播报。'
-						: '实时PCB-DRC已开启，但当前环境实时 DRC 未启用（需在 PCB 画布中生效）。', 'done');
+					ensureRealTimeDrc();
+					getCurrentDocType().then(function (docType) {
+						if (docType === 3) {
+							setStatus('已开启实时PCB-DRC播报：正在 PCB 画布中生效。', 'done');
+						} else {
+							setStatus('已开启实时PCB-DRC播报：请切换到 PCB 画布，实时 DRC 检出违规时自动播报。', 'done');
+						}
+					}).catch(function () {
+						setStatus('已开启实时PCB-DRC播报。', 'done');
+					});
 				} else {
 					setStatus('已关闭实时PCB-DRC播报。', 'done');
 				}
@@ -703,6 +733,16 @@
 			if (readRealtimeSetting()) {
 				ensureRealTimeDrc();
 			}
+			// 诊断：输出当前文档类型（1=原理图, 3=PCB）与实时 DRC 状态
+			getCurrentDocType().then(function (docType) {
+				console.log('[DRC 语音提醒] 当前文档类型:', docType, '(1=原理图, 3=PCB, undefined=无焦点文档)');
+				if (docType === 3 && readRealtimeSetting()) {
+					ensureRealTimeDrc();
+				}
+			});
+			queryRealTimeDrcStatus().then(function (st) {
+				console.log('[DRC 语音提醒] getRealTimeDrcStatus:', st);
+			});
 			initFromSaved().then(loadBuiltinSlots);
 		</script>
 	</body>
