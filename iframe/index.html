@@ -454,12 +454,14 @@
 
 			// 确保实时 DRC 已启用（仅 PCB；若已启用则返回 true）
 			function ensureRealTimeDrc() {
-				if (!edaObj || !edaObj.pcb_Drc || typeof edaObj.pcb_Drc.startRealTimeDrc !== 'function') return;
+				if (!edaObj || !edaObj.pcb_Drc || typeof edaObj.pcb_Drc.startRealTimeDrc !== 'function') return false;
 				try {
 					var ok = edaObj.pcb_Drc.startRealTimeDrc();
 					console.log('[DRC 语音提醒] startRealTimeDrc:', ok);
+					return ok === true;
 				} catch (e) {
 					console.warn('[DRC 语音提醒] startRealTimeDrc 异常：', e);
+					return false;
 				}
 			}
 
@@ -467,9 +469,13 @@
 				var on = realtimeSel.value === 'on';
 				writeRealtimeSetting(on);
 				if (on) {
-					ensureRealTimeDrc();
+					var ok = ensureRealTimeDrc();
+					setStatus(ok
+						? '已开启实时PCB-DRC播报：实时 DRC 检出违规时自动播报。'
+						: '实时PCB-DRC已开启，但当前环境实时 DRC 未启用（需在 PCB 画布中生效）。', 'done');
+				} else {
+					setStatus('已关闭实时PCB-DRC播报。', 'done');
 				}
-				setStatus(on ? '已开启实时PCB-DRC播报：实时 DRC 检出违规时自动播报。' : '已关闭实时PCB-DRC播报。', 'done');
 			});
 
 			// 轮询主线程写入的待播报数据（兜底通道；主线程 activate 未调用时无数据）
@@ -636,6 +642,9 @@
 				btnPickFolder.disabled = true;
 				var label = kind === 'sch' ? '原理图' : 'PCB';
 				try {
+					if (kind === 'pcb') {
+						ensureRealTimeDrc(); // 已处于 PCB 环境，确保实时 DRC 启用
+					}
 					setStatus('正在检查' + label + ' DRC ...', 'running');
 					var list = kind === 'sch'
 						? (await edaObj.sch_Drc.check(true, true, true)) || []
