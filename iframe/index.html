@@ -95,6 +95,16 @@
 			</div>
 		</div>
 
+		<div class="row">
+			<div class="setting">
+				<label for="realtimeSel">实时PCB-DRC播报</label>
+				<select id="realtimeSel">
+					<option value="on" selected>开启</option>
+					<option value="off">关闭</option>
+				</select>
+			</div>
+		</div>
+
 			<div class="row">
 				<button id="btnPickFolder" type="button">选择语音文件夹</button>
 				<input id="folderInput" type="file" webkitdirectory multiple style="display:none;" />
@@ -104,7 +114,8 @@
 			<div id="status">就绪：点击上方按钮开始检查。</div>
 			<div class="tip">
 				插件已内置合成语音（sch-error.wav、sch-warning.wav、pcb-error.wav、pcb-warning.wav、pass.wav），开箱即用；也可以选择自定义语音文件夹覆盖内置语音。<br />
-				选中 wav 文件夹后会记住所选语音文件，下次打开窗口自动加载；自定义语音优先于内置语音，内置缺失的文件用系统语音合成播报。
+				选中 wav 文件夹后会记住所选语音文件，下次打开窗口自动加载；自定义语音优先于内置语音，内置缺失的文件用系统语音合成播报。<br />
+				开启「实时PCB-DRC播报」后，PCB 实时 DRC 检出违规时也会自动播报（窗口会自动在后台保持运行）。
 			</div>
 
 		<script>
@@ -132,6 +143,7 @@
 			var folderInput = document.getElementById('folderInput');
 			var speedSel = document.getElementById('speedSel');
 			var countModeSel = document.getElementById('countModeSel');
+			var realtimeSel = document.getElementById('realtimeSel');
 			var voiceStatusEl = document.getElementById('voiceStatus');
 			var statusEl = document.getElementById('status');
 
@@ -364,6 +376,72 @@
 				}
 			}
 
+			// ---- 实时 PCB-DRC 播报开关 + 主线程待播报轮询 ----
+			var REALTIME_ENABLED_KEY = 'realtimeDrcEnabled';
+			var PENDING_REALTIME_KEY = 'pendingRealtimeDrc';
+
+			function readRealtimeSetting() {
+				if (edaObj && edaObj.sys_Storage && typeof edaObj.sys_Storage.getExtensionUserConfig === 'function') {
+					var v = edaObj.sys_Storage.getExtensionUserConfig(REALTIME_ENABLED_KEY);
+					return v === false ? false : true; // 默认开启
+				}
+				return true;
+			}
+
+			function writeRealtimeSetting(value) {
+				if (edaObj && edaObj.sys_Storage && typeof edaObj.sys_Storage.setExtensionUserConfig === 'function') {
+					return edaObj.sys_Storage.setExtensionUserConfig(REALTIME_ENABLED_KEY, value).catch(function () {});
+				}
+				return Promise.resolve();
+			}
+
+			function initRealtimeSetting() {
+				realtimeSel.value = readRealtimeSetting() ? 'on' : 'off';
+			}
+
+			realtimeSel.addEventListener('change', function () {
+				var on = realtimeSel.value === 'on';
+				writeRealtimeSetting(on);
+				setStatus(on ? '已开启实时PCB-DRC播报：实时 DRC 检出违规时自动播报。' : '已关闭实时PCB-DRC播报。', 'done');
+			});
+
+			// 轮询主线程写入的待播报数据（主线程无法播放音频，由窗口后台播报）
+			var pendingPolling = null;
+
+			function startRealtimePolling() {
+				if (pendingPolling) return;
+				pendingPolling = setInterval(async function () {
+					if (!edaObj || !edaObj.sys_Storage) return;
+					try {
+						var pending = edaObj.sys_Storage.getExtensionUserConfig(PENDING_REALTIME_KEY);
+						if (!pending || typeof pending !== 'object') return;
+						if (typeof edaObj.sys_Storage.deleteExtensionUserConfig === 'function') {
+							await edaObj.sys_Storage.deleteExtensionUserConfig(PENDING_REALTIME_KEY);
+						}
+						var errs = Number(pending.errors) || 0;
+						var warns = Number(pending.warnings) || 0;
+						if (errs === 0 && warns === 0) return;
+						var countMode = countModeSel.value;
+						primePlayback();
+						if (errs === 0 && warns === 0) {
+							await playOnce('pass');
+						} else {
+							var errTimes = countMode === 'once' ? (errs > 0 ? 1 : 0) : errs;
+							var warnTimes = countMode === 'once' ? (warns > 0 ? 1 : 0) : warns;
+							for (var i = 0; i < errTimes; i++) {
+								await playOnce('pcb-error');
+							}
+							for (var j = 0; j < warnTimes; j++) {
+								await playOnce('pcb-warning');
+							}
+						}
+						setStatus('实时PCB-DRC：错误 ' + errs + ' 个，警告 ' + warns + ' 个（自动播报完成）', 'done');
+					} catch (e) {
+						console.warn('[DRC 语音提醒] 实时 DRC 待播报处理失败：', e);
+					}
+				}, 800);
+			}
+
 			function itemCount(item) {
 				// 运行时结构：{type, count} 或 {type, rule, primitives[]}
 				if (item && typeof item.count === 'number' && item.count > 0) return item.count;
@@ -494,8 +572,8 @@
 				try {
 					setStatus('正在检查' + label + ' DRC ...', 'running');
 					var list = kind === 'sch'
-						? (await edaObj.sch_Drc.check(true, false, true)) || []
-						: (await edaObj.pcb_Drc.check(true, false, true)) || [];
+						? (await edaObj.sch_Drc.check(true, true, true)) || []
+						: (await edaObj.pcb_Drc.check(true, true, true)) || [];
 
 					console.log('[DRC 语音提醒] ' + label + ' 明细条目数:', list.length);
 					for (var di = 0; di < Math.min(list.length, 20); di++) {
@@ -543,7 +621,9 @@
 			btnPcb.addEventListener('click', function () { runCheck('pcb'); });
 			btnPickFolder.addEventListener('click', function () { pickFolder(); });
 
-			// 窗口打开时：先加载上次选择的语音文件夹，未覆盖的槽位再加载内置语音
+			// 窗口打开时：先加载上次选择的语音文件夹，未覆盖的槽位再加载内置语音；随后加载实时播报开关并启动轮询
+			initRealtimeSetting();
+			startRealtimePolling();
 			initFromSaved().then(loadBuiltinSlots);
 		</script>
 	</body>
