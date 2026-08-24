@@ -452,15 +452,12 @@
 				}
 			}
 
-			// 确保实时 DRC 已启用（仅 PCB；若已启用则结果为 true）
+			// 确保实时 DRC 已启用（仅 PCB；若已启用则返回 true）
 			function ensureRealTimeDrc() {
 				if (!edaObj || !edaObj.pcb_Drc || typeof edaObj.pcb_Drc.startRealTimeDrc !== 'function') return;
 				try {
-					edaObj.pcb_Drc.startRealTimeDrc().then(function (ok) {
-						console.log('[DRC 语音提醒] startRealTimeDrc:', ok);
-					}).catch(function (e) {
-						console.warn('[DRC 语音提醒] startRealTimeDrc 失败：', e);
-					});
+					var ok = edaObj.pcb_Drc.startRealTimeDrc();
+					console.log('[DRC 语音提醒] startRealTimeDrc:', ok);
 				} catch (e) {
 					console.warn('[DRC 语音提醒] startRealTimeDrc 异常：', e);
 				}

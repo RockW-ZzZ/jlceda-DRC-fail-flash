@@ -32,7 +32,12 @@ export function activate(_status?: 'onStartupFinished', _arg?: string): void {
 
 		// 确保实时 DRC 已启用（仅 PCB；已启用则返回 true）
 		if (eda.pcb_Drc && typeof eda.pcb_Drc.startRealTimeDrc === 'function') {
-			eda.pcb_Drc.startRealTimeDrc().catch(() => {});
+			try {
+				eda.pcb_Drc.startRealTimeDrc();
+			}
+			catch (e) {
+				console.error('[DRC 语音提醒] startRealTimeDrc 异常：', e);
+			}
 		}
 	}
 	catch (e) {
