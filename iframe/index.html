@@ -537,9 +537,6 @@
 				btnPickFolder.disabled = true;
 				var label = kind === 'sch' ? '原理图' : 'PCB';
 				try {
-					if (kind === 'pcb') {
-						ensureRealTimeDrc(); // 已处于 PCB 环境，确保实时 DRC 启用
-					}
 					setStatus('正在检查' + label + ' DRC ...', 'running');
 					var list = kind === 'sch'
 						? (await edaObj.sch_Drc.check(true, true, true)) || []
