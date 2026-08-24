@@ -3,7 +3,7 @@
 	"uuid": "7f19bd83238c409eb4193763e1ea69b3",
 	"displayName": "DRC 语音提醒",
 	"description": "原理图 / PCB DRC 检测完成后按错误数、警告数播放语音提示（可自定义本地语音文件，未选择时使用系统语音合成）。",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"publisher": "zcj1296461641@outlook.com",
 	"engines": {
 		"eda": "^3.2.0"

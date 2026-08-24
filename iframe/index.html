@@ -95,17 +95,17 @@
 			</div>
 		</div>
 
-		<div class="row">
-			<button id="btnPickFolder" type="button">选择语音文件夹</button>
-			<input id="folderInput" type="file" webkitdirectory multiple style="display:none;" />
-		</div>
-		<div id="voiceStatus">语音文件：未加载（将使用系统语音合成兜底）</div>
+			<div class="row">
+				<button id="btnPickFolder" type="button">选择语音文件夹</button>
+				<input id="folderInput" type="file" webkitdirectory multiple style="display:none;" />
+			</div>
+			<div id="voiceStatus">语音文件：未加载（将使用系统语音合成兜底）</div>
 
-		<div id="status">就绪：点击上方按钮开始检查。</div>
-		<div class="tip">
-			语音文件命名（放在所选文件夹内）：sch-error.wav、sch-warning.wav、pcb-error.wav、pcb-warning.wav（可选 pass.wav）。<br />
-			选中 wav 文件夹后会记住所选语音文件，下次打开窗口自动加载；未加载或缺失的文件用系统语音合成播报。
-		</div>
+			<div id="status">就绪：点击上方按钮开始检查。</div>
+			<div class="tip">
+				插件已内置合成语音（sch-error.wav、sch-warning.wav、pcb-error.wav、pcb-warning.wav、pass.wav），开箱即用；也可以选择自定义语音文件夹覆盖内置语音。<br />
+				选中 wav 文件夹后会记住所选语音文件，下次打开窗口自动加载；自定义语音优先于内置语音，内置缺失的文件用系统语音合成播报。
+			</div>
 
 		<script>
 			// iframe 内可直接使用注入的全局 eda 对象（兜底取 window.parent.eda）
@@ -123,6 +123,7 @@
 			var audioUrls = {};   // 槽位 -> objectURL（HTMLAudio 兜底用）
 			var slotFiles = {};   // 槽位 -> File（Web Audio 播放用）
 			var slotBuffers = {}; // 槽位 -> 解码后的 AudioBuffer 缓存
+			var builtinSlots = {}; // 槽位 -> 是否来自内置语音（自定义覆盖时置为 false）
 			var busy = false;
 
 			var btnSch = document.getElementById('btnSch');
@@ -139,21 +140,39 @@
 				statusEl.textContent = text;
 			}
 
-			function setSlotFile(key, file) {
+			function setSlotFile(key, file, fromBuiltin) {
 				if (audioUrls[key]) {
 					try { URL.revokeObjectURL(audioUrls[key]); } catch (e) {}
 				}
 				slotFiles[key] = file || null;
 				slotBuffers[key] = null;
 				audioUrls[key] = file ? URL.createObjectURL(file) : null;
+				if (typeof fromBuiltin === 'boolean') {
+					builtinSlots[key] = fromBuiltin;
+				} else if (!file) {
+					builtinSlots[key] = false;
+				}
 			}
 
 			function updateVoiceStatus() {
 				var loaded = [];
+				var builtinOnly = true;
 				for (var key in SLOTS) {
-					if (slotFiles[key]) loaded.push(SLOTS[key].file);
+					if (slotFiles[key]) {
+						loaded.push(SLOTS[key].file);
+						if (!builtinSlots[key]) builtinOnly = false;
+					}
 				}
-				voiceStatusEl.textContent = '语音文件：' + (loaded.length ? loaded.join('、') : '未加载（将使用系统语音合成兜底）');
+				var src = '未加载（将使用系统语音合成兜底）';
+				if (loaded.length) {
+					src = loaded.join('、');
+					if (builtinOnly) {
+						src = '内置语音（' + loaded.join('、') + '），可点击「选择语音文件夹」自定义';
+					} else {
+						src = '自定义语音（' + loaded.join('、') + '）';
+					}
+				}
+				voiceStatusEl.textContent = '语音文件：' + src;
 			}
 
 			function basename(path) {
@@ -308,7 +327,7 @@
 					try {
 						var blob = await idbGet('wav:' + key);
 						if (blob && blob instanceof Blob) {
-							setSlotFile(key, blob);
+							setSlotFile(key, blob, false);
 							any = true;
 						}
 					} catch (e) {
@@ -318,6 +337,30 @@
 				updateVoiceStatus();
 				if (any) {
 					setStatus('已自动加载上次选择的语音文件。', 'done');
+				}
+			}
+
+			// 从扩展包内读取内置语音（仅填充无自定义语音的槽位）
+			async function loadBuiltinSlots() {
+				if (!edaObj || !edaObj.sys_FileSystem || typeof edaObj.sys_FileSystem.getExtensionFile !== 'function') {
+					return;
+				}
+				var any = false;
+				for (var key in SLOTS) {
+					if (slotFiles[key]) continue; // 自定义语音优先，不覆盖
+					try {
+						var file = await edaObj.sys_FileSystem.getExtensionFile('wav/' + SLOTS[key].file);
+						if (file && typeof file.arrayBuffer === 'function') {
+							setSlotFile(key, file, true);
+							any = true;
+						}
+					} catch (e) {
+						console.warn('[DRC 语音提醒] 读取内置语音失败：' + SLOTS[key].file, e);
+					}
+				}
+				updateVoiceStatus();
+				if (any) {
+					setStatus('已加载内置语音，可点击「选择语音文件夹」自定义覆盖。', 'done');
 				}
 			}
 
@@ -500,8 +543,8 @@
 			btnPcb.addEventListener('click', function () { runCheck('pcb'); });
 			btnPickFolder.addEventListener('click', function () { pickFolder(); });
 
-			// 窗口打开时自动加载上次选择的语音文件夹
-			initFromSaved();
+			// 窗口打开时：先加载上次选择的语音文件夹，未覆盖的槽位再加载内置语音
+			initFromSaved().then(loadBuiltinSlots);
 		</script>
 	</body>
 </html>

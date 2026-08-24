@@ -11,7 +11,6 @@
 /coverage/
 /node_modules/
 /src/
-/wav/
 /.editorconfig
 /.gitattributes
 /.gitignore
@@ -23,3 +22,4 @@
 .eslintcache
 debug.log
 /fish_logo.jpg
+/wav/提示词.png
