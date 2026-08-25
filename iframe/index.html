@@ -95,16 +95,46 @@
 			</div>
 		</div>
 
-			<div class="row">
-				<button id="btnPickFolder" type="button">选择语音文件夹</button>
-				<input id="folderInput" type="file" webkitdirectory multiple style="display:none;" />
+		<div class="row">
+			<div class="setting">
+				<label for="saveTimerSel">定时保存</label>
+				<select id="saveTimerSel">
+					<option value="off" selected>关闭</option>
+					<option value="1">1 分钟</option>
+					<option value="5">5 分钟</option>
+					<option value="10">10 分钟</option>
+					<option value="30">半小时</option>
+					<option value="60">1 小时</option>
+				</select>
 			</div>
-			<div id="voiceStatus">语音文件：未加载（将使用系统语音合成兜底）</div>
+			<div class="setting">
+				<label for="drcTimerSel">定时DRC检查</label>
+				<select id="drcTimerSel">
+					<option value="off" selected>关闭</option>
+					<option value="1">1 分钟</option>
+					<option value="5">5 分钟</option>
+					<option value="10">10 分钟</option>
+					<option value="30">半小时</option>
+					<option value="60">1 小时</option>
+				</select>
+			</div>
+		</div>
+		<div class="row">
+			<div class="setting">
+				<label><input type="checkbox" id="drcShowWindow" checked /> 定时DRC呼出窗口</label>
+			</div>
+		</div>
 
-			<div id="status">就绪：点击上方按钮开始检查。</div>
-			<div class="tip">
-				插件已内置合成语音（sch-error.wav、sch-warning.wav、pcb-error.wav、pcb-warning.wav、pass.wav），开箱即用；也可以选择自定义语音文件夹覆盖内置语音。<br />
-				选中 wav 文件夹后会记住所选语音文件，下次打开窗口自动加载；自定义语音优先于内置语音，内置缺失的文件用系统语音合成播报。
+		<div class="row">
+			<button id="btnPickFolder" type="button">选择语音文件夹</button>
+			<input id="folderInput" type="file" webkitdirectory multiple style="display:none;" />
+		</div>
+		<div id="voiceStatus">语音文件：未加载（将使用系统语音合成兜底）</div>
+
+		<div id="status">就绪：点击上方按钮开始检查。</div>
+		<div class="tip">
+			插件已内置合成语音（sch-error.wav、sch-warning.wav、pcb-error.wav、pcb-warning.wav、pass.wav），开箱即用；也可以选择自定义语音文件夹覆盖内置语音。<br />
+			选中 wav 文件夹后会记住所选语音文件，下次打开窗口自动加载；自定义语音优先于内置语音，内置缺失的文件用系统语音合成播报。
 			</div>
 
 		<script>
@@ -132,6 +162,9 @@
 			var folderInput = document.getElementById('folderInput');
 			var speedSel = document.getElementById('speedSel');
 			var countModeSel = document.getElementById('countModeSel');
+			var saveTimerSel = document.getElementById('saveTimerSel');
+			var drcTimerSel = document.getElementById('drcTimerSel');
+			var drcShowWindow = document.getElementById('drcShowWindow');
 			var voiceStatusEl = document.getElementById('voiceStatus');
 			var statusEl = document.getElementById('status');
 
@@ -409,6 +442,188 @@
 				return new Blob([arr], { type: 'audio/wav' });
 			}
 
+			// ---- 定时保存 / 定时 DRC 检查 ----
+			var SAVE_TIMER_ID = 'drc-voice-alert-save-timer';
+			var DRC_TIMER_ID = 'drc-voice-alert-drc-timer';
+			var SAVE_INTERVAL_KEY = 'saveInterval';
+			var DRC_INTERVAL_KEY = 'drcInterval';
+			var DRC_SHOW_WINDOW_KEY = 'drcShowWindow';
+
+			// 周期选项值 -> 毫秒（off=0）
+			function timerOptionToMs(val) {
+				var n = parseInt(val, 10);
+				if (!n || n <= 0) return 0;
+				return n * 60 * 1000;
+			}
+
+			function readTimerSetting(key) {
+				if (edaObj && edaObj.sys_Storage && typeof edaObj.sys_Storage.getExtensionUserConfig === 'function') {
+					var v = edaObj.sys_Storage.getExtensionUserConfig(key);
+					if (v !== undefined && v !== null) return v;
+				}
+				return undefined;
+			}
+
+			function writeTimerSetting(key, value) {
+				if (edaObj && edaObj.sys_Storage && typeof edaObj.sys_Storage.setExtensionUserConfig === 'function') {
+					return edaObj.sys_Storage.setExtensionUserConfig(key, value).catch(function () {});
+				}
+				return Promise.resolve();
+			}
+
+			// 判断当前焦点文档类型：1=原理图, 3=PCB, 26=面板, 其他=无
+			function currentDocType() {
+				if (!edaObj || !edaObj.dmt_SelectControl || typeof edaObj.dmt_SelectControl.getCurrentDocumentInfo !== 'function') {
+					return Promise.resolve(undefined);
+				}
+				return edaObj.dmt_SelectControl.getCurrentDocumentInfo().then(function (doc) {
+					return doc && doc.documentType;
+				}).catch(function () {
+					return undefined;
+				});
+			}
+
+			// 保存当前激活文档（原理图/PCB/面板）
+			async function saveActiveDocument() {
+				if (!edaObj) return;
+				var docType = await currentDocType();
+				var label = '文档';
+				var saved = false;
+				try {
+					if (docType === 1 && edaObj.sch_Document && typeof edaObj.sch_Document.save === 'function') {
+						saved = await edaObj.sch_Document.save();
+						label = '原理图';
+					}
+					else if (docType === 3 && edaObj.pcb_Document && typeof edaObj.pcb_Document.save === 'function') {
+						saved = await edaObj.pcb_Document.save();
+						label = 'PCB';
+					}
+					else if (docType === 26 && edaObj.pnl_Document && typeof edaObj.pnl_Document.save === 'function') {
+						saved = await edaObj.pnl_Document.save();
+						label = '面板';
+					}
+					else {
+						setStatus('定时保存：当前无已打开的可保存文档（类型 ' + docType + '）', 'fail');
+						return;
+					}
+				} catch (e) {
+					console.warn('[DRC 语音提醒] 定时保存失败：', e);
+					setStatus('定时保存' + label + '失败', 'fail');
+					return;
+				}
+				setStatus(saved ? '已定时自动保存' + label + '。' : '定时保存' + label + '未成功（可能无改动或上传失败）', saved ? 'done' : 'fail');
+			}
+
+			// 定时 DRC 检查回调
+			async function runScheduledDrc() {
+				if (!edaObj) return;
+				var docType = await currentDocType();
+				var showWindow = drcShowWindow.checked;
+				try {
+					var list;
+					var label;
+					if (docType === 1 && edaObj.sch_Drc && typeof edaObj.sch_Drc.check === 'function') {
+						list = (await edaObj.sch_Drc.check(true, showWindow, true)) || [];
+						label = '原理图';
+					}
+					else if (docType === 3 && edaObj.pcb_Drc && typeof edaObj.pcb_Drc.check === 'function') {
+						list = (await edaObj.pcb_Drc.check(true, showWindow, true)) || [];
+						label = 'PCB';
+					}
+					else {
+						setStatus('定时DRC：当前无已打开的原理图或 PCB（类型 ' + docType + '）', 'fail');
+						return;
+					}
+					var r = classifyViolations(list);
+					primePlayback();
+					if (r.errors === 0 && r.warnings === 0) {
+						await playOnce('pass');
+					} else {
+						var countMode = countModeSel.value;
+						var errTimes = countMode === 'once' ? (r.errors > 0 ? 1 : 0) : r.errors;
+						var warnTimes = countMode === 'once' ? (r.warnings > 0 ? 1 : 0) : r.warnings;
+						for (var i = 0; i < errTimes; i++) {
+							await playOnce(label === '原理图' ? 'sch-error' : 'pcb-error');
+						}
+						for (var j = 0; j < warnTimes; j++) {
+							await playOnce(label === '原理图' ? 'sch-warning' : 'pcb-warning');
+						}
+					}
+					setStatus('定时DRC（' + label + '）：错误 ' + r.errors + ' 个，警告 ' + r.warnings + ' 个（自动播报完成）', 'done');
+				} catch (e) {
+					console.warn('[DRC 语音提醒] 定时DRC检查失败：', e);
+					setStatus('定时DRC检查失败：' + String((e && e.message) || e), 'fail');
+				}
+			}
+
+			// 重建定时器（根据当前下拉设置）
+			function rebuildTimers() {
+				// 先清除旧定时器
+				try {
+					if (edaObj && edaObj.sys_Timer) {
+						if (typeof edaObj.sys_Timer.clearIntervalTimer === 'function') {
+							edaObj.sys_Timer.clearIntervalTimer(SAVE_TIMER_ID);
+							edaObj.sys_Timer.clearIntervalTimer(DRC_TIMER_ID);
+						}
+					}
+				} catch (e) {}
+
+				if (!edaObj || !edaObj.sys_Timer || typeof edaObj.sys_Timer.setIntervalTimer !== 'function') {
+					setStatus('当前环境不支持定时器', 'fail');
+					return;
+				}
+
+				var saveMs = timerOptionToMs(saveTimerSel.value);
+				if (saveMs > 0) {
+					try {
+						edaObj.sys_Timer.setIntervalTimer(SAVE_TIMER_ID, saveMs, function () {
+							saveActiveDocument();
+						});
+					} catch (e) {
+						console.warn('[DRC 语音提醒] 设置定时保存失败：', e);
+					}
+				}
+
+				var drcMs = timerOptionToMs(drcTimerSel.value);
+				if (drcMs > 0) {
+					try {
+						edaObj.sys_Timer.setIntervalTimer(DRC_TIMER_ID, drcMs, function () {
+							runScheduledDrc();
+						});
+					} catch (e) {
+						console.warn('[DRC 语音提醒] 设置定时DRC失败：', e);
+					}
+				}
+			}
+
+			// 初始化定时设置（恢复上次配置并重建定时器）
+			function initTimers() {
+				var sv = readTimerSetting(SAVE_INTERVAL_KEY);
+				if (sv !== undefined) saveTimerSel.value = String(sv);
+				var dv = readTimerSetting(DRC_INTERVAL_KEY);
+				if (dv !== undefined) drcTimerSel.value = String(dv);
+				var sw = readTimerSetting(DRC_SHOW_WINDOW_KEY);
+				if (sw !== undefined) drcShowWindow.checked = !!sw;
+				rebuildTimers();
+			}
+
+			saveTimerSel.addEventListener('change', function () {
+				writeTimerSetting(SAVE_INTERVAL_KEY, saveTimerSel.value);
+				rebuildTimers();
+				setStatus('定时保存：' + (saveTimerSel.value === 'off' ? '已关闭' : '每 ' + saveTimerSel.options[saveTimerSel.selectedIndex].text), 'done');
+			});
+
+			drcTimerSel.addEventListener('change', function () {
+				writeTimerSetting(DRC_INTERVAL_KEY, drcTimerSel.value);
+				rebuildTimers();
+				setStatus('定时DRC检查：' + (drcTimerSel.value === 'off' ? '已关闭' : '每 ' + drcTimerSel.options[drcTimerSel.selectedIndex].text), 'done');
+			});
+
+			drcShowWindow.addEventListener('change', function () {
+				writeTimerSetting(DRC_SHOW_WINDOW_KEY, drcShowWindow.checked);
+				setStatus('定时DRC呼出窗口：' + (drcShowWindow.checked ? '开启' : '关闭（仅播报）'), 'done');
+			});
+
 			function itemCount(item) {
 				// 运行时结构：{type, count} 或 {type, rule, primitives[]}
 				if (item && typeof item.count === 'number' && item.count > 0) return item.count;
@@ -588,7 +803,8 @@
 			btnPcb.addEventListener('click', function () { runCheck('pcb'); });
 			btnPickFolder.addEventListener('click', function () { pickFolder(); });
 
-			// 窗口打开时：加载语音槽位（自定义优先，未覆盖的槽位加载内置语音）
+			// 窗口打开时：加载语音槽位（自定义优先，未覆盖的槽位加载内置语音）；恢复定时设置并重建定时器
+			initTimers();
 			initFromSaved().then(loadBuiltinSlots);
 		</script>
 	</body>
